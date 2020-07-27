@@ -1,4 +1,9 @@
 # coding: utf-8
+from concurrent.futures import ProcessPoolExecutor
+import copy
+import math
+import os
+
 from .token import Token
 from ..vars import NAMCHE, TSEK
 from ..vars import chunk_values as u
@@ -17,11 +22,52 @@ class Tokenize:
         self.pre_processed = None
         self.trie = trie
 
-    def tokenize(self, pre_processed, debug=False):
+
+    def parallelized_tokenize(self, pre_processed):
+
+        def __flatten(l):
+            return sum(l, [])
+
+        # group chunks by punctuation
+        chunks_grouped_by_punct = []
+        grouped_chunks = []
+        found_group = False
+        for i, chunk in enumerate(pre_processed.chunks):
+            if not chunk[0] and chunk[1][0] == 105:
+                found_group = True
+            else:
+                grouped_chunks.append(chunk)
+            
+            if found_group:
+                grouped_chunks.append(chunk)
+                chunks_grouped_by_punct.append(grouped_chunks)
+                grouped_chunks = []
+                found_group = False
+        else:
+            if grouped_chunks:
+                chunks_grouped_by_punct.append(grouped_chunks)
+
+        # create pre_process objects base in no. of cpu
+        grouped_pre_processed = []
+        n_cpu = os.cpu_count()
+        groups_per_cpu = math.ceil(len(chunks_grouped_by_punct) / n_cpu)
+        start, end = 0, groups_per_cpu
+        for _ in range(n_cpu):
+            dup_preprocess = copy.deepcopy(pre_processed)
+            dup_preprocess.chunks = __flatten(chunks_grouped_by_punct[start: end])
+            grouped_pre_processed.append(dup_preprocess)
+            start, end = end, end+groups_per_cpu
+
+        # do mutliprocessing tokenization
+        with ProcessPoolExecutor() as executor:
+            tokenized_sents = executor.map(self.tokenize, grouped_pre_processed)
+        return __flatten(tokenized_sents)
+
+
+    def tokenize(self, pre_processed):
         """
 
         :param pre_processed: PyBoTextChunks of the text to be tokenized
-        :param debug: prints debug info in True
         :return: a list of Token objects
         """
         self.pre_processed = pre_processed
@@ -254,8 +300,3 @@ class Tokenize:
             or A.SKRT_CONS in char_groups.values()
             or A.SKRT_SUB_CONS in char_groups.values()
         )
-
-    @staticmethod
-    def debug(debug, to_print):
-        if debug:
-            print(to_print, flush=True)
